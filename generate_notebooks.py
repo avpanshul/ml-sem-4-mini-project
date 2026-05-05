@@ -163,7 +163,13 @@ def load_and_aggregate_pm25(aqi_root: Path) -> pd.DataFrame:
     for csv_file in sorted(aqi_root.glob("*.csv")):
         df = pd.read_csv(csv_file)
         df.columns = [col.strip() for col in df.columns]
-        df["Date"] = pd.to_datetime(df["Date"].astype(str).str.strip(), errors="coerce")
+        # AQI files use day-first dates such as 2/1/2013 for 2-Jan-2013.
+        # Parsing without dayfirst drops much of the timeline and shrinks the model dataset.
+        df["Date"] = pd.to_datetime(
+            df["Date"].astype(str).str.strip(),
+            errors="coerce",
+            dayfirst=True,
+        )
         df["Time"] = df["Time"].astype(str).str.strip()
         df["PM2.5"] = pd.to_numeric(df["PM2.5"], errors="coerce")
         frames.append(df)
@@ -178,6 +184,11 @@ def load_and_aggregate_pm25(aqi_root: Path) -> pd.DataFrame:
             PM25_Observation_Count=("PM2.5", lambda s: s.notna().sum()),
         )
     )
+
+    daily_pm25 = daily_pm25.sort_values("Date").reset_index(drop=True)
+    # Fill full-day PM2.5 gaps so time-series lag features do not collapse
+    # large sections of the training sequence.
+    daily_pm25["Daily_PM25"] = daily_pm25["Daily_PM25"].interpolate(limit_direction="both")
 
     return daily_pm25
 """
@@ -365,6 +376,8 @@ This notebook creates lag and rolling PM2.5 features.
 Note:
 - these lag features use previous PM2.5 history
 - this usually improves R2 a lot compared with weather-only prediction
+- the train/test split stays chronological, but now keeps a more proportionate holdout
+  so the models do not get starved of training history
 """),
     code(common_setup + """
 from sklearn.compose import ColumnTransformer
@@ -391,7 +404,14 @@ feature_data["Temp_Range"] = feature_data["Max_Temperature"] - feature_data["Min
 feature_data["Month_sin"] = np.sin(2 * np.pi * feature_data["Month"] / 12)
 feature_data["Month_cos"] = np.cos(2 * np.pi * feature_data["Month"] / 12)
 
-feature_data = feature_data.dropna().reset_index(drop=True)
+required_history_features = [
+    "PM25_change_1",
+    "PM25_change_3",
+]
+required_history_features += [f"PM25_lag_{lag}" for lag in [1, 2, 3, 5, 7, 10, 14, 21, 30]]
+required_history_features += [f"PM25_roll_mean_{window}" for window in [3, 5, 7, 10, 14, 21, 30]]
+
+feature_data = feature_data.dropna(subset=required_history_features).reset_index(drop=True)
 
 print("Feature engineered dataset shape:", feature_data.shape)
 feature_data.head()
@@ -400,7 +420,19 @@ feature_data.head()
 feature_columns = [col for col in feature_data.columns if col not in ["Date", "Daily_PM25"]]
 target_column = "Daily_PM25"
 
-split_index = int(len(feature_data) * 0.75)
+minimum_train_rows = 650
+minimum_test_rows = 250
+
+if len(feature_data) < minimum_train_rows + minimum_test_rows:
+    raise ValueError(
+        f"Need at least {minimum_train_rows + minimum_test_rows} rows after feature engineering, "
+        f"but only found {len(feature_data)}."
+    )
+
+test_size = max(minimum_test_rows, int(len(feature_data) * 0.24))
+test_size = min(test_size, len(feature_data) - minimum_train_rows)
+split_index = len(feature_data) - test_size
+
 train_df = feature_data.iloc[:split_index].copy()
 test_df = feature_data.iloc[split_index:].copy()
 
@@ -482,43 +514,55 @@ print("Testing data shape :", X_test_processed.shape)
 models = {
     "Gradient Boosting": GradientBoostingRegressor(
         random_state=42,
-        n_estimators=700,
+        n_estimators=1000,
         learning_rate=0.02,
-        max_depth=2
+        max_depth=2,
+        subsample=0.9,
+        loss="huber"
     ),
     "XGBoost": XGBRegressor(
-        n_estimators=1200,
+        n_estimators=1400,
         max_depth=3,
-        learning_rate=0.03,
-        subsample=0.9,
-        colsample_bytree=0.9,
+        learning_rate=0.025,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        min_child_weight=2,
+        reg_alpha=0.05,
+        reg_lambda=1.2,
         objective="reg:squarederror",
         random_state=42
     ),
     "Random Forest": RandomForestRegressor(
-        n_estimators=1500,
+        n_estimators=1200,
         random_state=42,
-        max_depth=None,
-        min_samples_leaf=1
+        max_depth=24,
+        min_samples_leaf=1,
+        min_samples_split=2,
+        max_features=0.8,
+        n_jobs=1
     ),
     "AdaBoost": AdaBoostRegressor(
         random_state=42,
-        n_estimators=500,
-        learning_rate=0.03
+        n_estimators=600,
+        learning_rate=0.02
     ),
     "Extra Trees": ExtraTreesRegressor(
-        n_estimators=1500,
+        n_estimators=1400,
         random_state=42,
-        max_depth=18,
-        min_samples_leaf=1
+        max_depth=28,
+        min_samples_leaf=1,
+        min_samples_split=2,
+        max_features=0.9,
+        n_jobs=1
     ),
     "SVR": SVR(
-        C=50,
-        epsilon=0.05,
+        C=120,
+        epsilon=0.03,
         gamma="scale"
     ),
     "KNN": KNeighborsRegressor(
-        n_neighbors=3,
+        n_neighbors=4,
+        p=1,
         weights="distance"
     )
 }

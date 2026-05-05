@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+from io import StringIO
 from pathlib import Path
 import warnings
 
@@ -17,6 +19,9 @@ FRONTEND_BUILD_DIR = ROOT / "front end" / "build"
 BUNDLE_PATH = ROOT / "deployment_assets" / "best_pm25_model_bundle.joblib"
 MODEL_RESULTS_PATH = ROOT / "artifacts" / "pm25_model_evaluation_results.csv"
 BASE_DATA_PATH = ROOT / "artifacts" / "pm25_base_model_data.csv"
+FINAL_MODEL_NAME = "Random Forest"
+RANDOM_FOREST_MODEL_PATH = ROOT / "artifacts" / "random_forest_model.joblib"
+NOTEBOOK_RESULTS_PATH = ROOT / "07_model_testing_and_prediction.ipynb"
 
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
@@ -75,21 +80,53 @@ def load_history_by_city() -> dict[str, list[float]]:
 
 
 def load_model_results() -> list[dict]:
-    results_df = pd.read_csv(MODEL_RESULTS_PATH).sort_values("r2_score", ascending=False)
+    results_df: pd.DataFrame | None = None
+
+    if NOTEBOOK_RESULTS_PATH.exists():
+        try:
+            notebook = json.loads(NOTEBOOK_RESULTS_PATH.read_text(encoding="utf-8"))
+            for cell in notebook.get("cells", []):
+                if cell.get("cell_type") != "code":
+                    continue
+                source = "".join(cell.get("source", []))
+                if 'results_df = pd.read_csv(ARTIFACTS_DIR / "pm25_model_training_results.csv")' not in source:
+                    continue
+
+                for output in cell.get("outputs", []):
+                    data = output.get("data", {})
+                    plain_lines = data.get("text/plain")
+                    if not plain_lines:
+                        continue
+                    parsed_df = pd.read_fwf(StringIO("".join(plain_lines)))
+                    if "model" in parsed_df.columns and "r2_score" in parsed_df.columns:
+                        results_df = parsed_df
+                        break
+                if results_df is not None:
+                    break
+        except Exception:
+            results_df = None
+
+    if results_df is None:
+        results_df = pd.read_csv(MODEL_RESULTS_PATH)
+
+    results_df = results_df.sort_values("r2_score", ascending=False).reset_index(drop=True)
     rows = []
     for row in results_df.to_dict(orient="records"):
         rows.append(
             {
                 "name": row["model"],
-                "r2_score": round(float(row["r2_score"]), 4),
-                "mae": round(float(row["mae"]), 4),
-                "rmse": round(float(row["rmse"]), 4),
+                "r2_score": float(row["r2_score"]),
+                "mae": float(row["mae"]),
+                "rmse": float(row["rmse"]),
             }
         )
     return rows
 
 
 bundle = joblib.load(BUNDLE_PATH)
+if bundle.get("model_name") != FINAL_MODEL_NAME and RANDOM_FOREST_MODEL_PATH.exists():
+    bundle["model_name"] = FINAL_MODEL_NAME
+    bundle["model"] = joblib.load(RANDOM_FOREST_MODEL_PATH)
 base_df = load_base_data()
 history_by_city = load_history_by_city()
 model_results = load_model_results()

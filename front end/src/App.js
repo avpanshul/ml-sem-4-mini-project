@@ -16,11 +16,11 @@ export default function App() {
       <div className="container py-5">
         <div className="row justify-content-center mb-4">
           <div className="col-lg-10 text-center">
-            <span className="badge text-bg-dark mb-3">AQI Prediction Suite</span>
-            <h1 className="display-5 fw-bold">Air Quality Prediction and Model Comparison</h1>
+            <span className="badge text-bg-dark mb-3">Random Forest AQI Predictor</span>
+            <h1 className="display-5 fw-bold">Air Quality Prediction with Random Forest</h1>
             <p className="text-muted mb-0">
-              Compare regression and classification models,
-              and explore how weather conditions affect particulate pollution levels.
+              Use the final deployed Random Forest regressor and compare it against the
+              rest of the trained PM2.5 models.
             </p>
           </div>
         </div>

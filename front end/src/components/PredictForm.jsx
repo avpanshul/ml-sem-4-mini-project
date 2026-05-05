@@ -18,7 +18,7 @@ const initialForm = {
   wind_speed: '',
   wind_max: '',
   city: 'Custom',
-  model: 'gradient_boosting'
+  model: 'random_forest'
 };
 
 function validate(form) {
@@ -74,7 +74,7 @@ export default function PredictForm({ onResult }) {
     setLoading(true);
     setApiError('');
     try {
-      const result = await predictAQI({ ...form, model: 'gradient_boosting' });
+      const result = await predictAQI({ ...form, model: 'random_forest' });
       onResult(result);
     } catch (error) {
       setApiError(error.message);
@@ -127,7 +127,7 @@ export default function PredictForm({ onResult }) {
 
           <div className="mt-3">
             <label className="form-label small fw-semibold">ML Model</label>
-            <div className="form-control form-control-sm bg-light">Gradient Boosting Regressor</div>
+            <div className="form-control form-control-sm bg-light">Random Forest Regressor</div>
           </div>
 
           {apiError && <div className="alert alert-danger py-2 small mt-3 mb-0">{apiError}</div>}

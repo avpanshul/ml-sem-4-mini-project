@@ -34,7 +34,7 @@ export default function ModelComparison() {
       <div className="card-body p-4">
         <h5 className="card-title mb-1">Model Comparison</h5>
         <p className="text-muted small mb-4">
-          Live model metrics loaded from the trained backend bundle and evaluation summary.
+          Live metrics from the trained backend, with Random Forest deployed as the final prediction model.
         </p>
 
         {bestModel && (
@@ -49,7 +49,7 @@ export default function ModelComparison() {
           <div key={model.name} className="mb-3">
             <div className="d-flex justify-content-between small mb-1">
               <span>{model.name}</span>
-              <span className="fw-semibold">{model.r2_score.toFixed(2)}</span>
+              <span className="fw-semibold">{model.r2_score.toFixed(3)}</span>
             </div>
             <div className="progress" style={{ height: 10 }}>
               <div className="progress-bar bg-dark" style={{ width: `${model.r2_score * 100}%` }} />
