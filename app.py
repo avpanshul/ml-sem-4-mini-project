@@ -28,6 +28,17 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 app = Flask(__name__, static_folder=str(FRONTEND_BUILD_DIR), static_url_path="/")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
+bundle: dict | None = None
+base_df: pd.DataFrame | None = None
+history_by_city: dict[str, list[float]] | None = None
+model_results: list[dict] | None = None
+training_reference_year: int | None = None
+city_pm25_mean: dict[str, float] | None = None
+default_pm25_mean: float | None = None
+weather_reference: dict[str, float] | None = None
+weather_scale: dict[str, float] | None = None
+runtime_load_error: str | None = None
+
 
 def month_to_season(month: int) -> str:
     if month in (12, 1, 2):
@@ -69,13 +80,13 @@ def load_base_data() -> pd.DataFrame:
     return base_df.sort_values("Date").reset_index(drop=True)
 
 
-def load_history_by_city() -> dict[str, list[float]]:
+def load_history_by_city(source_df: pd.DataFrame) -> dict[str, list[float]]:
     histories: dict[str, list[float]] = {}
 
-    for city, city_df in base_df.groupby("City"):
+    for city, city_df in source_df.groupby("City"):
         histories[str(city)] = city_df["Daily_PM25"].tail(30).tolist()
 
-    histories["__default__"] = base_df["Daily_PM25"].tail(30).tolist()
+    histories["__default__"] = source_df["Daily_PM25"].tail(30).tolist()
     return histories
 
 
@@ -123,47 +134,87 @@ def load_model_results() -> list[dict]:
     return rows
 
 
-bundle = joblib.load(BUNDLE_PATH)
-if bundle.get("model_name") != FINAL_MODEL_NAME and RANDOM_FOREST_MODEL_PATH.exists():
-    bundle["model_name"] = FINAL_MODEL_NAME
-    bundle["model"] = joblib.load(RANDOM_FOREST_MODEL_PATH)
-base_df = load_base_data()
-history_by_city = load_history_by_city()
-model_results = load_model_results()
-training_reference_year = int(base_df["Year"].max())
-city_pm25_mean = {
-    str(city): float(city_df["Daily_PM25"].mean())
-    for city, city_df in base_df.groupby("City")
-}
-default_pm25_mean = float(base_df["Daily_PM25"].mean())
-weather_reference = {
-    "Avg_Temperature": float(base_df["Avg_Temperature"].mean()),
-    "Max_Temperature": float(base_df["Max_Temperature"].mean()),
-    "Min_Temperature": float(base_df["Min_Temperature"].mean()),
-    "Humidity": float(base_df["Humidity"].mean()),
-    "Rainfall_Snowmelt": float(base_df["Rainfall_Snowmelt"].fillna(0).mean()),
-    "Visibility": float(base_df["Visibility"].mean()),
-    "Wind_Speed": float(base_df["Wind_Speed"].mean()),
-    "Max_Sustained_Wind_Speed": float(
-        base_df["Max_Sustained_Wind_Speed"].fillna(base_df["Max_Sustained_Wind_Speed"].median()).mean()
-    ),
-}
-weather_scale = {
-    "Avg_Temperature": max(float(base_df["Avg_Temperature"].std()), 1.0),
-    "Max_Temperature": max(float(base_df["Max_Temperature"].std()), 1.0),
-    "Min_Temperature": max(float(base_df["Min_Temperature"].std()), 1.0),
-    "Humidity": max(float(base_df["Humidity"].std()), 1.0),
-    "Rainfall_Snowmelt": max(float(base_df["Rainfall_Snowmelt"].fillna(0).std()), 1.0),
-    "Visibility": max(float(base_df["Visibility"].std()), 1.0),
-    "Wind_Speed": max(float(base_df["Wind_Speed"].std()), 1.0),
-    "Max_Sustained_Wind_Speed": max(
-        float(base_df["Max_Sustained_Wind_Speed"].fillna(base_df["Max_Sustained_Wind_Speed"].median()).std()),
-        1.0,
-    ),
-}
+def ensure_runtime_loaded() -> None:
+    global bundle
+    global base_df
+    global history_by_city
+    global model_results
+    global training_reference_year
+    global city_pm25_mean
+    global default_pm25_mean
+    global weather_reference
+    global weather_scale
+    global runtime_load_error
+
+    if runtime_load_error is not None:
+        raise RuntimeError(runtime_load_error)
+
+    if bundle is not None:
+        return
+
+    try:
+        loaded_bundle = joblib.load(BUNDLE_PATH)
+        if loaded_bundle.get("model_name") != FINAL_MODEL_NAME and RANDOM_FOREST_MODEL_PATH.exists():
+            loaded_bundle["model_name"] = FINAL_MODEL_NAME
+            loaded_bundle["model"] = joblib.load(RANDOM_FOREST_MODEL_PATH)
+
+        loaded_base_df = load_base_data()
+        loaded_history_by_city = load_history_by_city(loaded_base_df)
+        loaded_model_results = load_model_results()
+        loaded_training_reference_year = int(loaded_base_df["Year"].max())
+        loaded_city_pm25_mean = {
+            str(city): float(city_df["Daily_PM25"].mean())
+            for city, city_df in loaded_base_df.groupby("City")
+        }
+        loaded_default_pm25_mean = float(loaded_base_df["Daily_PM25"].mean())
+        loaded_weather_reference = {
+            "Avg_Temperature": float(loaded_base_df["Avg_Temperature"].mean()),
+            "Max_Temperature": float(loaded_base_df["Max_Temperature"].mean()),
+            "Min_Temperature": float(loaded_base_df["Min_Temperature"].mean()),
+            "Humidity": float(loaded_base_df["Humidity"].mean()),
+            "Rainfall_Snowmelt": float(loaded_base_df["Rainfall_Snowmelt"].fillna(0).mean()),
+            "Visibility": float(loaded_base_df["Visibility"].mean()),
+            "Wind_Speed": float(loaded_base_df["Wind_Speed"].mean()),
+            "Max_Sustained_Wind_Speed": float(
+                loaded_base_df["Max_Sustained_Wind_Speed"]
+                .fillna(loaded_base_df["Max_Sustained_Wind_Speed"].median())
+                .mean()
+            ),
+        }
+        loaded_weather_scale = {
+            "Avg_Temperature": max(float(loaded_base_df["Avg_Temperature"].std()), 1.0),
+            "Max_Temperature": max(float(loaded_base_df["Max_Temperature"].std()), 1.0),
+            "Min_Temperature": max(float(loaded_base_df["Min_Temperature"].std()), 1.0),
+            "Humidity": max(float(loaded_base_df["Humidity"].std()), 1.0),
+            "Rainfall_Snowmelt": max(float(loaded_base_df["Rainfall_Snowmelt"].fillna(0).std()), 1.0),
+            "Visibility": max(float(loaded_base_df["Visibility"].std()), 1.0),
+            "Wind_Speed": max(float(loaded_base_df["Wind_Speed"].std()), 1.0),
+            "Max_Sustained_Wind_Speed": max(
+                float(
+                    loaded_base_df["Max_Sustained_Wind_Speed"]
+                    .fillna(loaded_base_df["Max_Sustained_Wind_Speed"].median())
+                    .std()
+                ),
+                1.0,
+            ),
+        }
+    except Exception as exc:
+        runtime_load_error = f"{type(exc).__name__}: {exc}"
+        raise RuntimeError(runtime_load_error) from exc
+
+    bundle = loaded_bundle
+    base_df = loaded_base_df
+    history_by_city = loaded_history_by_city
+    model_results = loaded_model_results
+    training_reference_year = loaded_training_reference_year
+    city_pm25_mean = loaded_city_pm25_mean
+    default_pm25_mean = loaded_default_pm25_mean
+    weather_reference = loaded_weather_reference
+    weather_scale = loaded_weather_scale
 
 
 def weather_pm25_proxy(inputs: dict[str, float], city: str) -> float:
+    ensure_runtime_loaded()
     city_mean = city_pm25_mean.get(city, default_pm25_mean)
 
     visibility_effect = ((weather_reference["Visibility"] - inputs["Visibility"]) / weather_scale["Visibility"]) * 35
@@ -195,6 +246,7 @@ def weather_pm25_proxy(inputs: dict[str, float], city: str) -> float:
 
 
 def adaptive_history(city: str, proxy: float) -> np.ndarray:
+    ensure_runtime_loaded()
     base_history = np.array(history_by_city.get(city, history_by_city["__default__"]), dtype=float)
     base_mean = float(base_history.mean())
     centered = base_history - base_mean
@@ -205,6 +257,7 @@ def adaptive_history(city: str, proxy: float) -> np.ndarray:
 
 
 def visibility_adjustment(visibility: float) -> float:
+    ensure_runtime_loaded()
     # Enforce a monotonic inverse relationship:
     # higher visibility should always push AQI downward.
     delta = visibility - weather_reference["Visibility"]
@@ -220,6 +273,7 @@ def rainfall_adjustment(rainfall: float) -> float:
 
 
 def build_feature_row(payload: dict) -> pd.DataFrame:
+    ensure_runtime_loaded()
     now = datetime.now()
     city = str(payload.get("city") or "Bangalore").strip() or "Bangalore"
     inputs = {
@@ -268,11 +322,16 @@ def build_feature_row(payload: dict) -> pd.DataFrame:
 
 @app.get("/api/health")
 def health_check():
+    try:
+        ensure_runtime_loaded()
+    except RuntimeError as exc:
+        return jsonify({"status": "error", "error": str(exc)}), 500
     return jsonify({"status": "ok", "model_name": bundle["model_name"]})
 
 
 @app.get("/api/model-comparison")
 def model_comparison():
+    ensure_runtime_loaded()
     return jsonify(
         {
             "best_model": bundle["model_name"],
@@ -286,6 +345,7 @@ def predict():
     payload = request.get_json(silent=True) or {}
 
     try:
+        ensure_runtime_loaded()
         feature_df = build_feature_row(payload)
         transformed = bundle["preprocessor"].transform(feature_df)
         base_prediction = float(bundle["model"].predict(transformed)[0])
